@@ -20,7 +20,7 @@ This stage is **not** ordinary table-quality checking. It checks whether the pre
 - data_dictionary: `outputs/prepared/data_dictionary.json`
 - execution_log: `outputs/prepared/execution_log.json`
 - workflow_plan: `outputs/plans/workflow_plan.json`
-- executor_source: `src/executor.py`
+- executor_source: `D:/dwzq/financial_table_workflow_agent/src/executor.py`
 - calendar: `data/sample/calendar.csv`
 
 ## 4. Key Validation Results

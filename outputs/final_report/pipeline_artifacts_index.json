@@ -2,7 +2,7 @@
   "project": "financial_table_workflow_agent",
   "report_version": "0.1",
   "n_artifacts": 22,
-  "n_exists": 18,
+  "n_exists": 22,
   "artifacts": [
     {
       "stage": "stage1_profiler",
@@ -116,25 +116,25 @@
       "stage": "stage6_report",
       "path": "outputs/final_report/final_workflow_summary.json",
       "description": "六阶段汇总 JSON",
-      "exists": false
+      "exists": true
     },
     {
       "stage": "stage6_report",
       "path": "outputs/final_report/final_workflow_report.md",
       "description": "最终总报告",
-      "exists": false
+      "exists": true
     },
     {
       "stage": "stage6_report",
       "path": "outputs/final_report/final_workflow_one_page.md",
       "description": "一页摘要",
-      "exists": false
+      "exists": true
     },
     {
       "stage": "stage6_report",
       "path": "outputs/final_report/pipeline_artifacts_index.json",
       "description": "产物索引",
-      "exists": false
+      "exists": true
     }
   ]
 }

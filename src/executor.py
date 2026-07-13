@@ -416,9 +416,11 @@ class CodeExecutor:
         for ticker, sub in df.groupby("ticker", sort=False):
             fund_t = fund[fund["ticker"] == ticker].sort_values("announce_date")
             if fund_t.empty:
-                # 该 ticker 无财务数据，补空列
-                for col in ["pe", "pb", "roe"]:
-                    sub = sub.assign(**{col: pd.NA})
+                # 该 ticker 无财务数据：补 announce_date(NaT) + pe/pb/roe(NA)，
+                # 保证 panel 始终含 announce_date 列，避免 Critic 因列缺失而 failed。
+                sub = sub.assign(
+                    announce_date=pd.NaT, pe=pd.NA, pb=pd.NA, roe=pd.NA
+                )
                 merged_parts.append(sub)
                 continue
             sub_sorted = sub.sort_values("date")

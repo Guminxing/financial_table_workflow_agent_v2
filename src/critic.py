@@ -374,14 +374,34 @@ class ValidityCritic:
         df = self.panel
         if (
             "source_fundamental_available" not in df.columns
-            or "announce_date" not in df.columns
             or "date" not in df.columns
         ):
             return self._result(
                 "fundamentals_aligned_by_announce_date", "look_ahead_bias", "error", "failed",
-                "Need source_fundamental_available, announce_date, date columns",
+                "Need source_fundamental_available and date columns",
                 {},
                 "Ensure executor aligns fundamentals by announce_date.",
+            )
+        # announce_date 列缺失：区分两种情况
+        if "announce_date" not in df.columns:
+            # 是否存在基本面值（pe/pb/roe 至少一个非空）
+            has_fund_value = False
+            if all(c in df.columns for c in ["pe", "pb", "roe"]):
+                has_fund_value = bool(df[["pe", "pb", "roe"]].notna().any().any())
+            if has_fund_value:
+                # 存在基本面值却没有 announce_date → failed（防时间泄漏）
+                return self._result(
+                    "fundamentals_aligned_by_announce_date", "look_ahead_bias", "error", "failed",
+                    "fundamentals present but announce_date column missing; cannot prove no look-ahead bias",
+                    {"announce_date_column_present": False, "has_fundamental_values": True},
+                    "Populate announce_date for all fundamental rows; never align by report_date.",
+                )
+            # 没有任何基本面值 → warning（空基本面是真实数据的正常情况，不阻塞）
+            return self._result(
+                "fundamentals_aligned_by_announce_date", "look_ahead_bias", "error", "warning",
+                "no fundamentals available; announce_date absent is expected (empty fundamentals)",
+                {"announce_date_column_present": False, "has_fundamental_values": False},
+                "No action needed; fundamentals are empty by design or data source.",
             )
         fund_rows = df[df["source_fundamental_available"]].copy()
         # announce_date 缺失但 pe/pb/roe 存在 → warning

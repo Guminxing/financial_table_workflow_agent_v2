@@ -122,6 +122,10 @@ class ReportGenerator:
         label_col = self.approved_features.get("label_column", "label_next_5d")
         label_not_in_features = label_col not in approved
 
+        # no-op kind（no_repair_needed / repair_disabled / None）
+        no_op = bool(self.repair_log.get("no_op", False))
+        no_op_kind = self.repair_log.get("no_op_kind")
+
         # 初始 Critic 的 failed 项
         failed_checks = [
             c for c in self.initial_validation.get("checks", []) if c.get("status") == "failed"
@@ -140,6 +144,27 @@ class ReportGenerator:
             else:
                 failed_reason = failed_checks[0].get("description", "")
 
+        # one_line 动态化，按 no_op_kind 区分
+        if no_op_kind == "no_repair_needed":
+            one_line = (
+                f"initial {initial_rows} rows -> Critic {initial_status} "
+                f"(no repair needed) -> {repaired_rows} rows -> re-run Critic {final_status}; "
+                f"label {label_col} kept out of approved features"
+            )
+        elif no_op_kind == "repair_disabled":
+            one_line = (
+                f"initial {initial_rows} rows -> Critic failed (repair disabled by --no_repair) "
+                f"-> {repaired_rows} rows unchanged -> final status failed; "
+                f"label {label_col} kept out of approved features"
+            )
+        else:
+            one_line = (
+                f"initial {initial_rows} rows -> Critic {initial_status} "
+                f"(close missing {rows_removed} rows) -> Repair removed {rows_removed} rows "
+                f"-> {repaired_rows} rows -> re-run Critic {final_status}; "
+                f"label {label_col} kept out of approved features"
+            )
+
         closed_loop = {
             "initial_rows": initial_rows,
             "initial_status": initial_status,
@@ -149,12 +174,9 @@ class ReportGenerator:
             "repaired_rows": repaired_rows,
             "final_status": final_status,
             "label_not_in_approved_features": label_not_in_features,
-            "one_line": (
-                f"initial {initial_rows} rows -> Critic {initial_status} "
-                f"(close missing {rows_removed} rows) -> Repair removed {rows_removed} rows "
-                f"-> {repaired_rows} rows -> re-run Critic {final_status}; "
-                f"label {label_col} kept out of approved features"
-            ),
+            "repair_skipped": no_op,
+            "no_op_kind": no_op_kind,
+            "one_line": one_line,
         }
 
         pipeline_stages = [
@@ -394,14 +416,27 @@ class ReportGenerator:
         lines.append(f"- Initial `prepared_panel.csv`: **{cl['initial_rows']} rows**.")
         lines.append(
             f"- Initial Critic status: **{cl['initial_status']}** — failed check "
-            f"`{cl['failed_check']}` ({cl['failed_reason']})."
+            f"`{cl['failed_check'] or 'none'}` ({cl['failed_reason'] or 'no failed checks'})."
         )
+        if cl.get("no_op_kind") == "no_repair_needed":
+            lines.append(
+                f"- Repair Loop: **no-op (no repair needed)** — initial critic did not fail; "
+                f"`repaired_panel.csv` = `prepared_panel.csv` with **{cl['repaired_rows']} rows**."
+            )
+        elif cl.get("no_op_kind") == "repair_disabled":
+            lines.append(
+                f"- Repair Loop: **disabled (--no_repair)** — initial critic failed but repair "
+                f"was disabled; panel unchanged at **{cl['repaired_rows']} rows**, final status "
+                f"remains **failed**."
+            )
+        else:
+            lines.append(
+                f"- Repair Loop removed **{cl['rows_removed']} rows** (missing `close`), "
+                f"producing `repaired_panel.csv` with **{cl['repaired_rows']} rows**."
+            )
         lines.append(
-            f"- Repair Loop removed **{cl['rows_removed']} rows** (missing `close`), "
-            f"producing `repaired_panel.csv` with **{cl['repaired_rows']} rows**."
-        )
-        lines.append(
-            f"- Re-run Critic status: **{cl['final_status']}** (failed → 0)."
+            f"- Re-run Critic status: **{cl['final_status']}** "
+            f"(failed → {self.final_validation.get('summary', {}).get('failed', 0)})."
         )
         lines.append(
             f"- Label isolation: `{s['label_column']}` is **not** in approved feature "
@@ -419,14 +454,22 @@ class ReportGenerator:
         lines.append("    RAW[raw financial tables<br/>price / volume / fundamentals / industry / calendar]")
         lines.append("    S1[Stage 1: Data Profiler<br/>profile.json]")
         lines.append("    S2[Stage 2: Workflow Planner<br/>workflow_plan.json]")
-        lines.append("    S3[Stage 3: Code Executor<br/>prepared_panel.csv 300 rows]")
-        lines.append("    S4[Stage 4: Validity Critic<br/>status = failed<br/>close missing 2 rows]")
-        lines.append("    S5[Stage 5: Repair Loop<br/>drop close-missing rows<br/>repaired_panel.csv 298 rows]")
-        lines.append("    S6[Stage 6: Re-run Critic<br/>status = passed_with_warnings]")
+        lines.append(f"    S3[Stage 3: Code Executor<br/>prepared_panel.csv {cl['initial_rows']} rows]")
+        lines.append(f"    S4[Stage 4: Validity Critic<br/>status = {cl['initial_status']}<br/>failed check: {cl['failed_check'] or 'none'}]")
+        if cl.get("no_op_kind") == "no_repair_needed":
+            lines.append("    S5[Stage 5: Repair Loop<br/>no-op (no repair needed)<br/>repaired_panel.csv = prepared_panel.csv]")
+            lines.append(f"    S6[Stage 6: Re-run Critic<br/>status = {cl['final_status']}]")
+            lines.append("    S4 -- not failed --> S5 --> S6")
+        elif cl.get("no_op_kind") == "repair_disabled":
+            lines.append("    S5[Stage 5: Repair Loop<br/>no-op (disabled, --no_repair)<br/>panel unchanged]")
+            lines.append(f"    S6[Stage 6: Re-run Critic<br/>status = {cl['final_status']}]")
+            lines.append("    S4 -- failed but --no_repair --> S5 --> S6")
+        else:
+            lines.append(f"    S5[Stage 5: Repair Loop<br/>drop close-missing rows<br/>repaired_panel.csv {cl['repaired_rows']} rows]")
+            lines.append(f"    S6[Stage 6: Re-run Critic<br/>status = {cl['final_status']}]")
+            lines.append("    S4 -- failed --> S5 --> S6")
         lines.append("    OUT[analysis-ready panel<br/>+ approved_feature_columns]")
-        lines.append("    RAW --> S1 --> S2 --> S3 --> S4")
-        lines.append("    S4 -- failed --> S5 --> S6")
-        lines.append("    S6 -- passed_with_warnings --> OUT")
+        lines.append(f"    S6 -- {cl['final_status']} --> OUT")
         lines.append("    S4 -. approved features .-> OUT")
         lines.append("```")
         lines.append("")
@@ -551,7 +594,8 @@ class ReportGenerator:
             f"{init_sum.get('failed')} failed of {init_sum.get('total_checks')})."
         )
         lines.append(
-            f"- Failed check: `{cl['failed_check']}` — {cl['failed_reason']}."
+            f"- Failed check: `{cl['failed_check'] or 'none'}` — "
+            f"{cl['failed_reason'] or 'no failed checks'}."
         )
         lines.append(
             f"- approved_feature_columns: {s['approved_feature_columns']}."
@@ -565,16 +609,33 @@ class ReportGenerator:
         lines.append("### Stage 5 — Repair Loop")
         lines.append("")
         rap = self.repair_plan.get("repair_actions", [])
-        lines.append(
-            f"- rows_before: {cl['initial_rows']} → rows_after: {cl['repaired_rows']} "
-            f"(removed {cl['rows_removed']})."
-        )
-        if rap:
-            a = rap[0]
+        if cl.get("no_op_kind") == "no_repair_needed":
             lines.append(
-                f"- action: `{a.get('strategy')}` on {a.get('target_columns')} — "
-                f"{a.get('reason')}"
+                f"- Repair skipped/no-op (initial critic did not fail): "
+                f"rows_before: {cl['initial_rows']} → rows_after: {cl['repaired_rows']} "
+                f"(removed {cl['rows_removed']})."
             )
+            lines.append(
+                "- `prepared_panel.csv` copied unchanged to `repaired_panel.csv`; "
+                "initial validation copied as repaired validation."
+            )
+        elif cl.get("no_op_kind") == "repair_disabled":
+            lines.append(
+                f"- Repair disabled by --no_repair (initial critic failed): "
+                f"rows_before: {cl['initial_rows']} → rows_after: {cl['repaired_rows']} "
+                f"(removed {cl['rows_removed']}); panel unchanged; final status remains failed."
+            )
+        else:
+            lines.append(
+                f"- rows_before: {cl['initial_rows']} → rows_after: {cl['repaired_rows']} "
+                f"(removed {cl['rows_removed']})."
+            )
+            if rap:
+                a = rap[0]
+                lines.append(
+                    f"- action: `{a.get('strategy')}` on {a.get('target_columns')} — "
+                    f"{a.get('reason')}"
+                )
         chk = self.repair_log.get("checks_after_repair", {})
         lines.append(
             f"- post-repair self-check: close_missing={chk.get('close_missing_count')}, "
@@ -592,9 +653,11 @@ class ReportGenerator:
             f"({fin_sum.get('passed')} passed / {fin_sum.get('warnings')} warnings / "
             f"{fin_sum.get('failed')} failed of {fin_sum.get('total_checks')})."
         )
+        close_rate_after = self._close_rate_after_repair()
+        close_rate_before = self._close_rate_before_repair()
         lines.append(
             f"- `close` missing rate after repair: "
-            f"{self._close_rate_after_repair():.4f} (was 0.0067 before)."
+            f"{close_rate_after:.4f} (was {close_rate_before:.4f} before)."
         )
         lines.append(
             f"- approved_feature_columns unchanged: {s['approved_feature_columns']}; "
@@ -724,22 +787,45 @@ class ReportGenerator:
 
         lines.append("## Closed-Loop Result")
         lines.append("")
-        lines.append(
-            f"- Initial `prepared_panel.csv`: **{cl['initial_rows']} rows**."
-        )
-        lines.append(
-            f"- The Critic found **2 rows with missing `close`** (a core price field) and "
-            f"reported status **{cl['initial_status']}**."
-        )
-        lines.append(
-            f"- The Repair Loop **deleted those 2 rows** (conservative: drop, not impute), "
-            f"producing `repaired_panel.csv` with **{cl['repaired_rows']} rows**."
-        )
-        lines.append(
-            f"- Re-running the Critic gave status **{cl['final_status']}** "
-            f"(0 failed; remaining warnings are expected pe/pb/roe sparsity and one missing "
-            f"industry, not failures)."
-        )
+        if cl.get("no_op_kind") == "no_repair_needed":
+            lines.append(
+                f"- Initial `prepared_panel.csv`: **{cl['initial_rows']} rows**."
+            )
+            lines.append(
+                f"- Critic status **{cl['initial_status']}**, no repair needed; "
+                f"panel unchanged at **{cl['repaired_rows']} rows**."
+            )
+            lines.append(
+                f"- Re-running the Critic gave status **{cl['final_status']}** "
+                f"(0 failed; remaining warnings are expected pe/pb/roe sparsity and "
+                f"missing industry, not failures)."
+            )
+        elif cl.get("no_op_kind") == "repair_disabled":
+            lines.append(
+                f"- Initial `prepared_panel.csv`: **{cl['initial_rows']} rows**."
+            )
+            lines.append(
+                f"- Critic failed, repair disabled (--no_repair); panel unchanged at "
+                f"**{cl['repaired_rows']} rows**, final status remains **failed**."
+            )
+        else:
+            lines.append(
+                f"- Initial `prepared_panel.csv`: **{cl['initial_rows']} rows**."
+            )
+            lines.append(
+                f"- The Critic found **{cl['rows_removed']} rows with missing `close`** "
+                f"(a core price field) and reported status **{cl['initial_status']}**."
+            )
+            lines.append(
+                f"- The Repair Loop **deleted those {cl['rows_removed']} rows** (conservative: "
+                f"drop, not impute), producing `repaired_panel.csv` with "
+                f"**{cl['repaired_rows']} rows**."
+            )
+            lines.append(
+                f"- Re-running the Critic gave status **{cl['final_status']}** "
+                f"(0 failed; remaining warnings are expected pe/pb/roe sparsity and one missing "
+                f"industry, not failures)."
+            )
         lines.append(
             f"- The label `{s['label_column']}` is **not** in the approved feature columns — "
             f"label leakage is prevented by construction."
@@ -822,3 +908,12 @@ class ReportGenerator:
         if n == 0:
             return 0.0
         return float(self.repaired_panel["close"].isna().sum()) / n
+
+    def _close_rate_before_repair(self) -> float:
+        """实算 prepared_panel 的 close 缺失率（不硬编码）。"""
+        if self.prepared_panel is None or "close" not in self.prepared_panel.columns:
+            return -1.0
+        n = len(self.prepared_panel)
+        if n == 0:
+            return 0.0
+        return float(self.prepared_panel["close"].isna().sum()) / n

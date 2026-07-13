@@ -21,3 +21,17 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Real A-share data fetch outputs (Stage 8)
+data/raw_real/
+data/raw_real_verify/
+data/**/_cache/
+outputs_real/
+outputs_real_verify/
+
+# Real data fetch cache + throwaway test outputs
+outputs/cache/
+outputs_norepair_test/
+
+# Runtime session logs (regenerated each run; latest_session.json is overwritten)
+outputs/sessions/
